@@ -1,0 +1,11 @@
+.bootstrap/
+.wsl/
+data/*
+!data/.gitkeep
+# リポジトリに含める再現用フィクスチャ。
+!data/rag-test-data/
+!data/rag-test-data/**
+output/*
+!output/.gitkeep
+**/__pycache__/
+*.py[cod]

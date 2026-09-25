@@ -1,0 +1,18 @@
+{
+  "checkpoint": {
+    "repo_id": "jinaai/jina-clip-v2",
+    "revision": "ef81d7807b9feb6030085e4dcf43869871509745"
+  },
+  "clip_implementation": {
+    "repo_id": "jinaai/jina-clip-implementation",
+    "revision": "39e6a55ae971b59bea6e44675d237c99762e7ee2"
+  },
+  "text_checkpoint": {
+    "repo_id": "jinaai/jina-embeddings-v3",
+    "revision": "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6"
+  },
+  "text_implementation": {
+    "repo_id": "jinaai/xlm-roberta-flash-implementation",
+    "revision": "bd55a5ec8e6c0fb1d6c26efb4b6a4a74ce8a88d3"
+  }
+}

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>RAG検索テスト</title>
+    <link rel="stylesheet" href="/ui.css">
+    <script src="/ui.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="page-header">
+        <div class="page-header-top">
+          <div>
+            <p class="eyebrow">LOCAL RAG PLAYGROUND</p>
+            <h1>RAG検索テスト</h1>
+            <p class="page-description">テキストやファイルを組み合わせて、登録済みデータを検索します。</p>
+          </div>
+          <button id="index-button" class="index-button" type="button">インデックス更新</button>
+        </div>
+      </header>
+
+      <section class="panel search-panel" aria-labelledby="search-heading">
+        <h2 id="search-heading">検索条件</h2>
+        <div id="drop-zone" class="drop-zone">
+          <span class="drop-icon" aria-hidden="true">＋</span>
+          <div>
+            <p class="drop-title">ファイルをここにドロップ</p>
+            <p class="drop-description">TXT、画像、動画、PDF、XLSXに対応</p>
+          </div>
+          <button id="choose-files" class="secondary-button" type="button">ファイルを選択</button>
+        </div>
+        <input
+          id="file-input"
+          class="visually-hidden"
+          type="file"
+          multiple
+          accept=".txt,.jpg,.jpeg,.png,.mp4,.mov,.mkv,.avi,.webm,.pdf,.xlsx"
+        >
+        <ul id="file-list" class="file-grid" aria-live="polite"></ul>
+
+        <label class="field-label" for="query-text">テキスト検索</label>
+        <textarea
+          id="query-text"
+          class="query-field"
+          rows="4"
+          placeholder="検索したい文章を入力"
+        ></textarea>
+        <div class="search-actions">
+          <p id="search-status" class="search-status" role="status" aria-live="polite"></p>
+          <button id="search-button" class="primary-button" type="button">検索</button>
+        </div>
+      </section>
+
+      <section class="results-section" aria-labelledby="results-heading">
+        <div class="results-heading">
+          <div>
+            <p class="eyebrow">MATCHES</p>
+            <h2 id="results-heading">検索結果</h2>
+          </div>
+          <span id="result-count" class="result-count"></span>
+        </div>
+        <ul id="result-list" class="result-list" aria-live="polite">
+          <li class="empty-state">検索すると結果がここに表示されます。</li>
+        </ul>
+      </section>
+      <footer class="page-footer">検索結果を選ぶと、ファイルをモーダルでプレビューできます。</footer>
+    </main>
+
+    <dialog id="index-dialog" class="index-dialog" aria-labelledby="index-dialog-heading">
+      <div class="index-dialog-heading">
+        <div>
+          <p class="eyebrow">INDEX REBUILD</p>
+          <h2 id="index-dialog-heading">インデックス更新</h2>
+        </div>
+        <button id="index-dialog-close" class="dialog-close" type="button" aria-label="閉じる" hidden>×</button>
+      </div>
+      <p id="index-dialog-status" class="index-dialog-status" role="status" aria-live="polite">準備中…</p>
+      <div class="index-progress-summary">
+        <span id="index-progress-count">0 / 0件</span>
+        <span id="index-progress-percent">0%</span>
+      </div>
+      <progress id="index-progress" class="index-progress" max="100" value="0">0%</progress>
+      <p id="index-current-file" class="index-current-file"></p>
+      <ol id="index-log" class="index-log" role="log" aria-live="polite"></ol>
+    </dialog>
+
+    <dialog id="preview-dialog" class="preview-dialog" aria-labelledby="preview-title">
+      <div class="preview-header">
+        <div class="preview-heading-copy">
+          <p id="preview-type" class="eyebrow"></p>
+          <h2 id="preview-title"></h2>
+          <p id="preview-meta" class="preview-meta"></p>
+        </div>
+        <button id="preview-close" class="dialog-close" type="button" aria-label="閉じる">×</button>
+      </div>
+      <p id="preview-status" class="preview-status" role="status" aria-live="polite"></p>
+      <div id="preview-content" class="preview-content"></div>
+      <a id="preview-download" class="preview-download" hidden>ファイルをダウンロード</a>
+    </dialog>
+  </body>
+</html>
