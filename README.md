@@ -9,7 +9,7 @@ RAG本体はUbuntu上で動き、Windows側ではWSL 2の構築と起動を行�
 ### クイックスタート
 ```powershell
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-Get-Content .\rag\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手順に従って環境をセットアップし、スモークテストと同梱テストデータのインデックス作成まで実行してください。前提条件が不足または確認不能なら、インストールや変更をせず停止して報告してください。"
+Get-Content .\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手順に従って環境をセットアップし、スモークテストと同梱テストデータのインデックス作成まで実行してください。前提条件が不足または確認不能なら、インストールや変更をせず停止して報告してください。"
 ```
 
 ## 技術スタック
@@ -48,8 +48,8 @@ Get-Content .\rag\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手�
 
 ## 固定要件
 
-- リポジトリはWSLから参照できるドライブ文字付きのローカルパスに置く。RAGのコード、データ、スクリプト、モデル取得キャッシュ、WSL仮想ディスクを含む管理対象ファイルはすべてリポジトリ内の `rag\` の下に置く。UNCパスは使わない。
-- リポジトリルート直下にRAG用ファイルを作らない。
+- リポジトリはWSLから参照できるドライブ文字付きのローカルパスに置く。RAGの実行・管理対象（コード、データ、スクリプト、モデル取得キャッシュ、WSL仮想ディスクなど）はすべてリポジトリ内の `rag\` の下に置く。UNCパスは使わない。
+- リポジトリルート直下には `README.md` と `LICENSE` を置き、RAGの実装やデータなどは置かない。
 - Windows GPUドライバー、Microsoft WSL共有カーネル、ディストリビューションの登録情報はOS管理対象とする。WSL内にLinux版NVIDIAドライバーを入れない。
 - Microsoft Store版Ubuntuアプリは追加せず、Ubuntu 24.04.5の専用WSL 2ディストリビューション `RAG-Ubuntu` を `rag\.wsl\RAG-Ubuntu\` に登録する。
 - 既存の `Ubuntu` ディストリビューションは変更しない。
@@ -60,7 +60,8 @@ Get-Content .\rag\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手�
 
 | 内容 | 保存先 |
 | --- | --- |
-| 実装、CLI、手順書、セットアップスクリプト | `rag\` |
+| README（この手順書） | リポジトリルートの `README.md` |
+| 実装、CLI、セットアップスクリプト | `rag\` |
 | 同梱テスト入力 | `rag\data\rag-test-data\`（Gitで管理） |
 | 追加の入力 | `rag\data\`（同梱テストデータ以外はGitで管理しない） |
 | Ubuntuイメージとチェックサム | `rag\.bootstrap\` |
@@ -99,7 +100,7 @@ PowerShellでリポジトリのルートを開き、次を実行する。Windows
 
 ```powershell
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-Get-Content .\rag\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手順に従って環境をセットアップし、スモークテストと同梱テストデータのインデックス作成まで実行してください。前提条件が不足または確認不能なら、インストールや変更をせず停止して報告してください。"
+Get-Content .\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手順に従って環境をセットアップし、スモークテストと同梱テストデータのインデックス作成まで実行してください。前提条件が不足または確認不能なら、インストールや変更をせず停止して報告してください。"
 ```
 
 Codexは最初に `wsl.exe --version`、`wsl.exe --status`、`wsl.exe --help` とWindows側の `nvidia-smi` を確認する。`wsl.exe --help` に `--install --from-file`、`--manage`、`--cd` がない場合は停止する。`nvidia-smi` でCUDA 12.8に対応するWindowsドライバー（570.65以上）とGPUを確認できない場合も停止する。WSLやドライバーの導入・更新は行わない。リポジトリの場所がドライブ文字付きのローカルパスでない場合も停止する。すべての前提を確認してから、次のスクリプトを実行する。
@@ -237,17 +238,17 @@ wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/r
 
 車の画像を検索クエリに使った結果と、検索結果に表示された車の画像プレビュー。
 
-![車の画像をクエリにした検索結果](assets/screenshots/car_image_find.png)
+![車の画像をクエリにした検索結果](rag/assets/screenshots/car_image_find.png)
 
-![検索結果の車の画像プレビュー](assets/screenshots/result_car_preview.pmg.png)
+![検索結果の車の画像プレビュー](rag/assets/screenshots/result_car_preview.pmg.png)
 
 ### テキストから動画シーンを検索
 
 テキスト「dog」で検索し、京都の柴犬動画で該当したシーンをプレビューした例。
 
-![dogの検索結果](assets/screenshots/dog_find.png)
+![dogの検索結果](rag/assets/screenshots/dog_find.png)
 
-![京都の柴犬動画のシーンプレビュー](assets/screenshots/result_preview_kyoto.png)
+![京都の柴犬動画のシーンプレビュー](rag/assets/screenshots/result_preview_kyoto.png)
 
 ## 実運用に向けた課題
 
