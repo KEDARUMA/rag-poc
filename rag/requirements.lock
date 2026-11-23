@@ -53,6 +53,7 @@ portalocker==3.2.0
 protobuf==7.36.2
 pydantic==2.13.5
 pydantic_core==2.46.5
+pypdfium2==5.15.2
 Pygments==2.21.0
 PyYAML==6.0.3
 qdrant-client==1.19.1

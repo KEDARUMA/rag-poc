@@ -1,7 +1,8 @@
-"""Qdrant Local のコレクションとポイント操作。"""
+"""Qdrant Serverのfloat16コレクションとポイント操作。"""
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
+    Datatype,
     Distance,
     FieldCondition,
     Filter,
@@ -11,24 +12,55 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from .config import COLLECTION_NAME, QDRANT_PATH, VECTOR_SIZE
+from .config import (
+    COLLECTION_NAME, LEGACY_QDRANT_PATH, QDRANT_SERVER_ROOT,
+    QDRANT_URL, VECTOR_DATATYPE, VECTOR_SIZE,
+)
+from .qdrant_server import ensure_server
 
 
 def open_client() -> QdrantClient:
-    """WSL仮想ディスク内の永続Qdrantデータを開く。"""
-    return QdrantClient(path=str(QDRANT_PATH))
+    """専用WSLのQdrant Serverを起動し、移行済みデータへ接続する。"""
+    ensure_server()
+    client = QdrantClient(url=QDRANT_URL, timeout=60)
+    try:
+        migration_path = QDRANT_SERVER_ROOT / "local-migration.json"
+        if (LEGACY_QDRANT_PATH / "meta.json").is_file():
+            import json
+
+            if not migration_path.is_file() or json.loads(
+                migration_path.read_text(encoding="utf-8")
+            ).get("status") != "completed":
+                raise RuntimeError(
+                    "旧Local DBの移行が未完了です。scripts/prepare-qdrant-server.pyを実行してください。"
+                )
+        ensure_collection(client)
+        return client
+    except Exception:
+        client.close()
+        raise
 
 
 def ensure_collection(client: QdrantClient) -> None:
-    """1024次元Cosine検索用コレクションを用意する。"""
+    """1024次元・float16のCosine検索用コレクションを用意し、型を検査する。"""
     if not client.collection_exists(COLLECTION_NAME):
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(
                 size=VECTOR_SIZE,
                 distance=Distance.COSINE,
+                datatype=Datatype.FLOAT16,
+                on_disk=True,
             ),
         )
+    vectors = client.get_collection(COLLECTION_NAME).config.params.vectors
+    if (
+        not isinstance(vectors, VectorParams)
+        or vectors.size != VECTOR_SIZE
+        or vectors.distance != Distance.COSINE
+        or vectors.datatype != Datatype(VECTOR_DATATYPE)
+    ):
+        raise RuntimeError("Qdrantのベクトル設定が1024次元・Cosine・float16と一致しません")
 
 
 def clear_collection(client: QdrantClient) -> None:
@@ -45,6 +77,7 @@ def upsert_points(client: QdrantClient, points: list) -> None:
         client.upsert(
             collection_name=COLLECTION_NAME,
             points=points[offset : offset + batch_size],
+            wait=True,
         )
 
 
@@ -82,6 +115,7 @@ def delete_old_source_points(
         client.delete(
             collection_name=COLLECTION_NAME,
             points_selector=PointIdsList(points=stale_ids),
+            wait=True,
         )
 
 
@@ -115,4 +149,5 @@ def delete_all_points(client: QdrantClient) -> None:
     client.delete(
         collection_name=COLLECTION_NAME,
         points_selector=FilterSelector(filter=Filter()),
+        wait=True,
     )

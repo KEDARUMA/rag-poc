@@ -34,7 +34,7 @@ for directory in \
     "${RUNTIME_ROOT}/cache/torch" \
     "${RUNTIME_ROOT}/cache/xdg" \
     "${RUNTIME_ROOT}/cache/pip" \
-    "${RUNTIME_ROOT}/qdrant_data" \
+    "${RUNTIME_ROOT}/qdrant-server" \
     "${RUNTIME_ROOT}/tmp" \
     "${RUNTIME_ROOT}/frames" \
     "${RUNTIME_ROOT}/logs"; do
@@ -75,5 +75,8 @@ runuser -u "${RAG_USER}" -- env \
     PIP_CACHE_DIR="${PIP_CACHE_DIR}" \
     TMPDIR="${TMPDIR}" \
     "${PYTHON}" "${RAG_ROOT}/scripts/prepare-model-cache.py"
+
+echo "Qdrant Serverを準備し、既存Local DBがあればfloat16へ移行します。"
+runuser -u "${RAG_USER}" -- "${PYTHON}" "${RAG_ROOT}/scripts/prepare-qdrant-server.py"
 
 echo "WSL内のRAG環境構築が完了しました。"

@@ -11,6 +11,7 @@ const ALLOWED_EXTENSIONS = new Set([
   "webm",
   "pdf",
   "xlsx",
+  "zip",
 ]);
 // 状態: 追加順とプレビューURLを保持するドロップファイル一覧。
 const fileQueue = [];
@@ -200,7 +201,9 @@ function renderResults(results) {
     openButton.className = "result-open";
     openButton.type = "button";
     openButton.dataset.resultIndex = String(index);
-    openButton.textContent = result.name;
+    openButton.textContent = result.archive_member
+      ? `${result.name} → ${result.archive_member}`
+      : result.name;
     row.append(openButton);
 
     // 定数: 類似度とファイル固有情報の表示欄。
@@ -216,6 +219,9 @@ function renderResults(results) {
  * 検索結果の種類を画面表示用の日本語へ変換する。
  */
 function getResultTypeLabel(type) {
+  if (type === "pdf") {
+    return "PDF";
+  }
   if (type === "video") {
     return "動画";
   }
@@ -265,7 +271,9 @@ function formatResultMetadata(result) {
   if (Number.isFinite(score)) {
     details.push(`類似度 ${score.toFixed(3)}`);
   }
-  if (result.type === "video") {
+  if (result.type === "pdf" && Number.isInteger(result.page)) {
+    details.push(`${result.page} / ${result.page_count}ページ`);
+  } else if (result.type === "video") {
     // 定数: 動画シーンの開始・終了時刻。
     const sceneStart = formatMediaTime(result.start);
     const sceneEnd = formatMediaTime(result.end);
@@ -286,24 +294,39 @@ function formatResultMetadata(result) {
 }
 
 /**
- * 選択した検索結果を動画・画像・TXTのモーダルプレビューで開く。
+ * 選択した検索結果を動画・画像・PDF・TXTのモーダルプレビューで開く。
  */
 async function openResultPreview(result) {
   // 定数: このプレビュー要求に割り当てる識別子。
   const requestId = previewRequestId + 1;
   previewRequestId = requestId;
   // 定数: ブラウザーから同一オリジンで取得するファイルURL。
-  const fileUrl = `/api/file?path=${encodeURIComponent(result.path)}`;
+  const fileUrl = `/api/file?path=${encodeURIComponent(result.path)}`
+    + (result.archive_member ? `&member=${encodeURIComponent(result.archive_member)}` : "");
   previewType.textContent = getResultTypeLabel(result.type);
-  previewTitle.textContent = result.name;
+  previewTitle.textContent = result.archive_member
+    ? `${result.name} → ${result.archive_member}`
+    : result.name;
   previewMeta.textContent = formatResultMetadata(result);
   previewStatus.textContent = "";
   previewContent.replaceChildren();
   previewDownload.href = fileUrl;
-  previewDownload.download = result.name;
+  previewDownload.download = result.archive_member
+    ? result.archive_member.split("/").pop()
+    : result.name;
   previewDownload.hidden = false;
   if (!previewDialog.open) {
     previewDialog.showModal();
+  }
+
+  if (result.type === "pdf") {
+    // 定数: 一致したページを開くPDFビューアー。
+    const viewer = document.createElement("iframe");
+    viewer.className = "preview-pdf";
+    viewer.src = `${fileUrl}#page=${Number.isInteger(result.page) ? result.page : 1}`;
+    viewer.title = `${result.name} ${result.page || 1}ページ`;
+    previewContent.append(viewer);
+    return;
   }
 
   if (result.type === "video") {

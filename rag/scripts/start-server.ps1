@@ -23,6 +23,12 @@ $DriveLetter = $RagRoot.Substring(0, 1).ToLowerInvariant()
 $RelativePath = $RagRoot.Substring(3).Replace('\', '/')
 $WslRagRoot = "/mnt/$DriveLetter/$RelativePath"
 
+& wsl.exe --distribution $DistroName --cd $WslRagRoot --user rag --exec `
+    /home/rag/rag-runtime/.venv/bin/python scripts/prepare-qdrant-server.py --start-only
+if ($LASTEXITCODE -ne 0) {
+    throw 'Qdrant Serverの起動に失敗しました。'
+}
+
 Write-Host "RAG検索サーバーを起動します: http://localhost:$Port/"
 Write-Host '停止するには Ctrl+C を押してください。'
 

@@ -1,4 +1,4 @@
-"""TXT・画像・動画をQdrant Localへ登録する処理。"""
+"""TXT・画像・動画・PDF・ZIPをQdrant Serverのfloat16へ登録する処理。"""
 
 import hashlib
 import sqlite3
@@ -9,14 +9,17 @@ from typing import Callable, Iterable
 
 from qdrant_client.models import PointStruct
 
+from .archive import extract_archive
 from .config import (
     COLLECTION_NAME,
     DATA_ROOT,
     INDEX_STATE_PATH,
     MODEL_ID,
     MODEL_REVISION,
+    TEMP_ROOT,
 )
 from .embedding import EmbeddingProvider
+from .pdf import render_pdf_pages
 from .storage import (
     clear_collection,
     delete_old_source_points,
@@ -30,7 +33,16 @@ from .video import extract_video_frames
 # 定数: Phase 1で登録するファイル形式。
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
-TYPE_NAMES = {"txt": "text", "text": "text", "image": "image", "video": "video"}
+TYPE_NAMES = {
+    "txt": "text",
+    "text": "text",
+    "image": "image",
+    "video": "video",
+    "zip": "zip",
+    "pdf": "pdf",
+}
+# 定数: PDFを対象外にしていた旧ZIP登録を再処理するための版。
+ZIP_INDEX_VERSION = "pdf-pages-v1"
 
 
 def _file_hash(path: Path) -> str:
@@ -78,13 +90,17 @@ def _file_kind(path: Path) -> str | None:
         return "image"
     if suffix in VIDEO_EXTENSIONS:
         return "video"
+    if suffix == ".zip":
+        return "zip"
+    if suffix == ".pdf":
+        return "pdf"
     return None
 
 
 def _selected_kinds(type_values: Iterable[str] | None) -> set[str]:
     """CLI指定を内部のファイル種別へ正規化する。"""
     if not type_values:
-        return {"text", "image", "video"}
+        return {"text", "image", "video", "zip", "pdf"}
     selected = set()
     for value in type_values:
         normalized = TYPE_NAMES.get(value.strip().casefold())
@@ -125,6 +141,25 @@ def _create_points(
 ) -> list[PointStruct]:
     """1ファイルのEmbeddingとQdrantポイントを作る。"""
     base_payload = _base_payload(path, source_id, file_hash, indexed_at)
+    if kind == "zip":
+        archive_points = []
+        with extract_archive(path, TEMP_ROOT) as members:
+            for member in members:
+                points = _create_points(
+                    member.path, member.kind, source_id, file_hash, indexed_at, embedder
+                )
+                for point in points:
+                    point.id = _point_id(
+                        source_id, "zip", f"{file_hash}:{member.name}:{point.id}"
+                    )
+                    point.payload.update(
+                        {key: value for key, value in base_payload.items() if key != "type"}
+                    )
+                    point.payload["archive_member"] = member.name
+                    archive_points.append(point)
+        if not archive_points:
+            raise ValueError("ZIP内に登録可能な内容がありません")
+        return archive_points
     vectors = []
     records = []
 
@@ -140,6 +175,14 @@ def _create_points(
             )
             for index, chunk in enumerate(chunks)
         ]
+    elif kind == "pdf":
+        with render_pdf_pages(path, TEMP_ROOT) as pages:
+            for page in pages:
+                vectors.extend(embedder.embed_images([page.path]))
+                records.append((
+                    "pdf_page", f"{file_hash}:{page.number}",
+                    {"page": page.number, "page_count": page.page_count},
+                ))
     elif kind == "image":
         from PIL import Image
 
@@ -194,10 +237,14 @@ def _prepare_manifest(connection: sqlite3.Connection) -> None:
             source_id TEXT PRIMARY KEY,
             file_path TEXT NOT NULL,
             file_hash TEXT NOT NULL,
-            indexed_at TEXT NOT NULL
+            indexed_at TEXT NOT NULL,
+            index_version TEXT NOT NULL DEFAULT ''
         )
         """
     )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(indexed_files)")}
+    if "index_version" not in columns:
+        connection.execute("ALTER TABLE indexed_files ADD COLUMN index_version TEXT NOT NULL DEFAULT ''")
     connection.commit()
 
 
@@ -275,12 +322,13 @@ def index_directory(
                 source_id = _source_id(path)
                 file_hash = _file_hash(path)
                 prior = connection.execute(
-                    "SELECT file_hash FROM indexed_files WHERE source_id = ?",
+                    "SELECT file_hash, index_version FROM indexed_files WHERE source_id = ?",
                     (source_id,),
                 ).fetchone()
                 if (
                     prior is not None
                     and prior[0] == file_hash
+                    and (kind != "zip" or prior[1] == ZIP_INDEX_VERSION)
                     and source_hash_exists(client, source_id, file_hash)
                 ):
                     summary["skipped"] += 1
@@ -301,14 +349,16 @@ def index_directory(
                         connection.execute(
                             """
                             INSERT INTO indexed_files
-                                (source_id, file_path, file_hash, indexed_at)
-                            VALUES (?, ?, ?, ?)
+                                (source_id, file_path, file_hash, indexed_at, index_version)
+                            VALUES (?, ?, ?, ?, ?)
                             ON CONFLICT(source_id) DO UPDATE SET
                                 file_path = excluded.file_path,
                                 file_hash = excluded.file_hash,
-                                indexed_at = excluded.indexed_at
+                                indexed_at = excluded.indexed_at,
+                                index_version = excluded.index_version
                             """,
-                            (source_id, str(path.resolve()), file_hash, indexed_at),
+                            (source_id, str(path.resolve()), file_hash, indexed_at,
+                             ZIP_INDEX_VERSION if kind == "zip" else ""),
                         )
                         connection.commit()
                         summary["indexed"] += 1

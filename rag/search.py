@@ -1,4 +1,4 @@
-"""テキスト・画像・動画検索CLI。"""
+"""テキスト・画像・動画・PDF・ZIP検索CLI。"""
 
 import argparse
 import json
@@ -15,16 +15,18 @@ from rag_poc.searcher import search
 def main() -> int:
     """検索引数を処理し、結果をJSONで標準出力へ返す。"""
     parser = argparse.ArgumentParser(
-        description="Jina CLIP v2とQdrant Localで類似検索します"
+        description="Jina CLIP v2とQdrant Serverで類似検索します"
     )
     query_group = parser.add_mutually_exclusive_group(required=True)
     query_group.add_argument("--text", help="テキスト検索クエリ")
     query_group.add_argument("--image", help="画像ファイルのパス")
     query_group.add_argument("--video", help="動画ファイルのパス")
+    query_group.add_argument("--zip", help="内部のTXT・画像・動画・PDFを検索入力にするZIPのパス")
+    query_group.add_argument("--pdf", help="全ページの画像を検索入力にするPDFのパス")
     parser.add_argument("--limit", type=int, default=10, help="最大結果数")
     parser.add_argument(
         "--type",
-        help="対象をtext,image,videoからカンマ区切りで指定",
+        help="対象をtext,image,video,pdfからカンマ区切りで指定",
     )
     parser.add_argument(
         "--min-score",
@@ -45,9 +47,15 @@ def main() -> int:
     elif arguments.image is not None:
         query_kind = "image"
         query_value = arguments.image
-    else:
+    elif arguments.video is not None:
         query_kind = "video"
         query_value = arguments.video
+    elif arguments.zip is not None:
+        query_kind = "zip"
+        query_value = arguments.zip
+    else:
+        query_kind = "pdf"
+        query_value = arguments.pdf
 
     try:
         result = search(

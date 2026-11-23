@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, quote
 PROJECT_DIRECTORY = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_DIRECTORY / "src"))
 
+from rag_poc.archive import extract_archive
 from rag_poc.config import DATA_ROOT, TEMP_ROOT, TEXT_CHUNK_OVERLAP, TEXT_CHUNK_SIZE
 from rag_poc.indexer import index_directory
 from rag_poc.searcher import search_many
@@ -41,9 +42,11 @@ ALLOWED_QUERY_EXTENSIONS = {
     ".webm",
     ".pdf",
     ".xlsx",
+    ".zip",
 }
 # 定数: 検索結果プレビューで配信する登録対象の拡張子。
 ALLOWED_PREVIEW_EXTENSIONS = {
+    ".pdf",
     ".txt",
     ".jpg",
     ".jpeg",
@@ -144,15 +147,10 @@ def _run_index_job() -> None:
 
 
 def _extract_text_query(path: Path) -> str:
-    """TXT・PDF・XLSXから検索用の文字列を抽出する。"""
+    """TXT・XLSXから検索用の文字列を抽出する。"""
     suffix = path.suffix.casefold()
     if suffix == ".txt":
         return path.read_text(encoding="utf-8-sig", errors="replace")
-    if suffix == ".pdf":
-        from pypdf import PdfReader
-
-        reader = PdfReader(str(path))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
     if suffix == ".xlsx":
         from openpyxl import load_workbook
 
@@ -194,15 +192,15 @@ def _filename(path: str) -> str:
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def _create_webm_preview(source_path: Path) -> Path:
+def _create_webm_preview(source_path: Path, cache_identity: str = "") -> Path:
     """元動画をChromium再生用のVP9 WebMへ変換してキャッシュする。"""
     source_stat = source_path.stat()
     cache_root = TEMP_ROOT / "webm_preview_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
-    cache_identity = (
+    cache_identity = cache_identity or (
         f"{source_path}:{source_stat.st_size}:{source_stat.st_mtime_ns}"
-    ).encode("utf-8")
-    cache_key = hashlib.sha256(cache_identity).hexdigest()
+    )
+    cache_key = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
     cached_path = cache_root / f"{cache_key}.webm"
     if cached_path.is_file() and cached_path.stat().st_size > 0:
         return cached_path
@@ -272,7 +270,8 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
             query = parse_qs(query_string)
             file_path = query.get("path", [""])[0]
             preview_format = query.get("format", [""])[0]
-            self._serve_data_file(file_path, preview_format)
+            member_name = query.get("member", [""])[0]
+            self._serve_data_file(file_path, preview_format, member_name)
             return
 
         file_info = STATIC_FILES.get(request_path)
@@ -289,7 +288,7 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def _serve_data_file(
-        self, path_value: str, preview_format: str = ""
+        self, path_value: str, preview_format: str = "", member_name: str = ""
     ) -> None:
         """rag/data配下の検索結果ファイルをインライン配信する。"""
         try:
@@ -300,6 +299,32 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
+        if member_name:
+            if not file_path.is_file() or file_path.suffix.casefold() != ".zip":
+                self.send_error(404)
+                return
+            try:
+                source_stat = file_path.stat()
+                cache_identity = (
+                    f"{file_path}:{source_stat.st_size}:{source_stat.st_mtime_ns}:{member_name}"
+                )
+                with extract_archive(file_path, TEMP_ROOT, member_name) as members:
+                    member = members[0]
+                    self._serve_preview_file(
+                        member.path, preview_format, member.name.rsplit("/", 1)[-1],
+                        cache_identity,
+                    )
+            except (OSError, ValueError) as error:
+                self._send_json(400, {"error": str(error)})
+            return
+
+        self._serve_preview_file(file_path, preview_format, file_path.name)
+
+    def _serve_preview_file(
+        self, file_path: Path, preview_format: str, response_name: str,
+        cache_identity: str = "",
+    ) -> None:
+        """通常ファイルとZIPから取り出したファイルを同じ方式で配信する。"""
         if (
             not file_path.is_file()
             or file_path.suffix.casefold() not in ALLOWED_PREVIEW_EXTENSIONS
@@ -310,17 +335,16 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
         if preview_format not in {"", "webm"}:
             self.send_error(400)
             return
-        response_name = file_path.name
         if preview_format == "webm":
             if file_path.suffix.casefold() not in VIDEO_EXTENSIONS:
                 self.send_error(400)
                 return
             try:
-                file_path = _create_webm_preview(file_path)
+                file_path = _create_webm_preview(file_path, cache_identity)
             except (OSError, RuntimeError) as error:
-                self.send_error(500, str(error))
+                self._send_json(500, {"error": str(error)})
                 return
-            response_name = Path(path_value).name.rsplit(".", 1)[0] + ".webm"
+            response_name = response_name.rsplit(".", 1)[0] + ".webm"
 
         file_size = file_path.stat().st_size
         start = 0
@@ -442,7 +466,11 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
                         suffix,
                         len(content),
                     )
-                    if suffix in {".txt", ".pdf", ".xlsx"}:
+                    if suffix == ".zip":
+                        queries.append(("zip", str(temporary_path)))
+                    elif suffix == ".pdf":
+                        queries.append(("pdf", str(temporary_path)))
+                    elif suffix in {".txt", ".xlsx"}:
                         extracted_text = _extract_text_query(temporary_path)
                         chunks = _split_text_query(extracted_text)
                         if not chunks:
@@ -482,6 +510,9 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
                         "width": result.get("width"),
                         "height": result.get("height"),
                         "chunk_index": result.get("chunk_index"),
+                        "archive_member": result.get("archive_member"),
+                        "page": result.get("page"),
+                        "page_count": result.get("page_count"),
                     }
                     for result in search_result["results"]
                     if result.get("path")

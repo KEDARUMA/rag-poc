@@ -24,13 +24,15 @@ Get-Content .\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手順�
 | 言語・実行環境 | Python 3.12、WSL内のvenv |
 | GPU推論 | PyTorch 2.11.0+cu128、CUDA 12.8 |
 | マルチモーダルEmbedding | Jina CLIP v2でテキストと画像・動画フレームを共通のベクトル空間に変換。ベクトル次元数は1024。モデルと補助コードのリビジョンは `model-cache.json` で固定 |
-| マルチモーダル検索 | テキストクエリはテキスト・画像・動画、画像クエリは画像・動画、動画クエリは動画を検索 |
+| マルチモーダル検索 | テキストはTXT・画像・動画・PDF、画像とPDFは画像・動画・PDF、動画は動画を検索 |
 | AIライブラリ | Sentence Transformers 3.4.1、Transformers 4.48.3 |
-| ベクトルDB | Qdrant Local Mode（qdrant-client 1.19.1）。DBはWSLのLinuxファイルシステム内に保存 |
+| ベクトルDB | Qdrant Server 1.19.1（qdrant-client 1.19.1）。WSL内の127.0.0.1:6333へ接続。1024次元・Cosine・float16で保存 |
 | インデックス状態管理 | SQLiteとファイル内容ハッシュ。未変更ファイルの再登録を省き、更新ファイルを判定 |
 | テキスト処理 | TXTをチャンク化して登録。チャンク幅1000文字、重複幅100文字 |
 | 画像処理 | Pillowによる読み込みと画像Embedding |
 | 動画処理 | FFmpegによるフレーム抽出、PySceneDetect 0.7.1によるシーン検出。シーン代表フレームと5秒間隔のフレームを登録 |
+| PDF処理 | pypdfium2 5.15.2でページを画像化し、1ページ1ベクトルで登録。画像だけのPDFとZIP内PDFに対応 |
+| ZIP処理 | ZIP単位で更新を管理。内部のTXT・画像・動画・PDFを個別に登録し、結果はZIP単位に集約して内部ファイルをプレビュー |
 | CLI | `index.py` と `search.py`。検索結果などの標準出力はJSON |
 | デモUI | Python標準ライブラリの `HTTPServer` と静的HTML/CSS/JavaScript |
 | Codex連携 | Codex CLIからWSL内のPython CLIを実行。MCPとDockerは使用しない |
@@ -40,11 +42,10 @@ Get-Content .\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手順�
 
 | 用途 | 候補技術 | 状況 |
 | --- | --- | --- |
-| PDF・DOCX処理 | Docling | Phase 2候補。現行の入力対象外 |
+| DOCX処理 | Docling | Phase 2候補。現行の入力対象外 |
 | XLSX処理 | openpyxl | Phase 2候補。現行の入力対象外 |
 | OCR | RapidOCR、必要に応じてTesseract | Phase 2候補。現行では未実装 |
 | 動画音声の文字起こし | faster-whisper | Phase 3候補。現行では未実装 |
-| 複数プロセス・高負荷時のベクトルDB | WSL上のQdrant Server | 必要になった場合に移行を検討。現行はQdrant Local Mode |
 
 ## 固定要件
 
@@ -53,8 +54,8 @@ Get-Content .\README.md -Raw -Encoding UTF8 | codex exec -C . "READMEの手順�
 - Windows GPUドライバー、Microsoft WSL共有カーネル、ディストリビューションの登録情報はOS管理対象とする。WSL内にLinux版NVIDIAドライバーを入れない。
 - Microsoft Store版Ubuntuアプリは追加せず、Ubuntu 24.04.5の専用WSL 2ディストリビューション `RAG-Ubuntu` を `rag\.wsl\RAG-Ubuntu\` に登録する。
 - 既存の `Ubuntu` ディストリビューションは変更しない。
-- Phase 1ではTXT、JPG/JPEG/PNG、MP4/MOV/MKV/AVI/WEBMを扱うマルチモーダルRAG検索を対象にする。EmbeddingはJina CLIP v2、ベクトルDBはQdrant Local。
-- Docker、MCP、回答生成LLM、PDF/DOCX/XLSX、OCR、音声検索は対象外。
+- Phase 1ではTXT、JPG/JPEG/PNG、MP4/MOV/MKV/AVI/WEBM、PDFと、これらを含むZIPを扱うマルチモーダルRAG検索を対象にする。EmbeddingはJina CLIP v2、保存先は専用WSLのQdrant Server。全形式の保存ベクトルをfloat16に統一する。
+- Docker、MCP、回答生成LLM、DOCX/XLSX、OCR、音声検索は対象外。
 
 ## 保存場所
 
@@ -191,7 +192,7 @@ wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/r
 wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python index.py data/rag-test-data
 ```
 
-最初のコマンドは `rag\data\` 全体、2つ目は同梱テストデータのみを登録する。TXT、JPG/JPEG/PNG、MP4/MOV/MKV/AVI/WEBMを再帰的に登録する。動画はPySceneDetectでシーン検出し、代表フレームと5秒間隔のフレームを登録する。同じファイルは内容ハッシュでスキップし、更新ファイルは差し替える。`--rebuild` はQdrantコレクションを消去して再構築する。
+最初のコマンドは `rag\data\` 全体、2つ目は同梱テストデータのみを登録する。TXT、JPG/JPEG/PNG、MP4/MOV/MKV/AVI/WEBM、PDF、ZIPを再帰的に登録する。動画はPySceneDetectでシーン検出し、代表フレームと5秒間隔のフレームを登録する。同じファイルは内容ハッシュでスキップし、更新ファイルは差し替える。`--rebuild` はQdrantコレクションを消去して再構築する。
 
 テキスト検索の例:
 
@@ -206,7 +207,60 @@ wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/r
 wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python search.py --video "$WslRagRoot/data/rag-test-data/videos/beach.mp4" --json
 ```
 
-検索結果はJSONで、type、path、scoreを含む。動画結果にはtime、start、endも含む。テキストは文章・画像・動画シーン、画像は画像・動画シーン、動画は動画シーンを検索する。Qdrant Localの同じデータをインデックスと検索で同時に開かない。
+検索結果はJSONで、type、path、scoreを含む。動画結果にはtime、start、end、PDFにはpage、page_countも含む。テキストは文章・画像・動画シーン・PDFページ、画像とPDFは画像・動画シーン・PDFページ、動画は動画シーンを検索する。登録と検索は専用WSL内のQdrant Serverへ接続する。
+
+### float16保存と旧Local DBの移行
+
+TXT・画像・動画フレーム・ZIP内部を含む全ベクトルを、Qdrant Serverのfloat16で保存する。1024次元のベクトル本体は1件2048バイト（2KiB）。メタデータ、検索インデックス、WALなどは別に容量を使う。Jina CLIP v2の推論とクエリ生成はfloat32で行い、Serverが保存時にfloat16へ変換する。
+
+現行のqdrant-client 1.19.1のLocal Modeではfloat16保存を実装していないため、WSL内にServerを配置する。Dockerは使用しない。Server本体は公式配布物のバージョンとSHA256を固定して取得し、WSL仮想ディスク内の `/home/rag/rag-runtime/qdrant-server/` に本体・設定・データを保存する。RESTは127.0.0.1:6333、gRPCとテレメトリーは無効にする。
+
+既存環境の移行は、RAGの登録・検索処理を停止した状態で次のコマンドを実行する。新規構築では `setup-wsl.sh` から同じ準備処理を実行する。
+
+```powershell
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python scripts/prepare-qdrant-server.py
+```
+
+旧DBの `/home/rag/rag-runtime/qdrant_data/` を保持し、ポイントのID・メタデータを引き継いでServerへコピーする。全件の件数・メタデータ・float16の実値と、種別ごとに最大3件のベクトルによる検索結果を照合する。移行状態は `qdrant-server/local-migration.json` に保存する。途中で停止した移行は再実行でき、完了済みの場合は古いDBを再コピーしない。SQLiteの登録状態も引き続き使用する。
+
+通常のCLIと画面起動時は、配置済みの専用Serverを自動起動する。ServerはWSL終了まで動作し、ログは `/home/rag/rag-runtime/logs/qdrant-server.log` に出力する。移行が未完了、接続先が別プロセス、保存設定が1024次元・Cosine・float16と異なる場合は停止する。
+
+### 画像PDFの登録・検索
+
+画像が中心で文字を含まないPDFに対応する。全ページを一枚ずつ画像化し、Jina CLIP v2の画像Embeddingで登録する。OCRは使わない。ページ画像の最大辺は1600pxで、利用後に削除する。文字を含むPDFも、表示されたページ画像として扱う。
+
+PDFを `rag\data\` に置けば通常の登録対象になる。PDFだけを登録する場合と、PDFを検索入力にする場合は次のコマンドを使う。
+
+```powershell
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python index.py --type pdf
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python search.py --pdf data/example.pdf --json
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python search.py --text "犬の写真" --type pdf --json
+```
+
+PDFは1ファイル単位で更新を管理し、1ページにつき1024次元・float16のベクトルを一件保存する。ベクトル本体は1ページ2KiB。更新時は新しい全ページの登録後に旧ポイントを削除する。破損やパスワードが必要なPDFは登録エラーになり、既存ポイントを保持する。
+
+結果はPDF単位で最も高いスコアのページにまとめ、`type=pdf`、1から始まる `page`、総ページ数の `page_count` を返す。画面では一致したページ番号を表示し、PDFビューアーでそのページを開く。元PDFもダウンロードできる。ZIP内PDFも同じ方式で処理し、ZIP内のパスとページ番号を返す。
+
+### ZIPの登録・検索
+
+ZIPは一つの登録ファイルとして扱い、SQLiteの登録記録もZIPごとに一行保持する。ZIP全体の内容ハッシュが変わったら中身を再登録し、登録後に同じZIPの古いポイントを削除する。中身は結合せず、TXTのチャンク、画像、動画フレームごとにベクトルを作る。
+
+SQLiteにZIPの処理版を記録し、PDF対応前に登録したZIPも通常のインデックス更新で一度再登録する。既存SQLiteには処理版の列を追加して引き継ぐ。PDFはページ画像ごとにベクトルを作る。
+
+ZIPを `rag\data\` に置けば通常の登録対象になる。ZIPだけを登録する場合と、ZIPの中身を検索クエリとして使う場合は次のコマンドを使う。
+
+```powershell
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python index.py --type zip
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python search.py --zip data/example.zip --json
+```
+
+デモ画面でもZIPをドロップして検索できる。中のTXT・画像・動画・PDFをそれぞれクエリにし、各結果の最高スコアでまとめる。検索対象は内部ファイルの種別に従う（TXTは全種別、画像とPDFは画像・動画・PDF、動画は動画）。
+
+ZIP内でヒットした結果は、ZIPのパスを `path`、内部の相対パスを `archive_member` に返す。通常の検索でもZIPごとに最も高いスコアの一件へまとめる。画面では `example.zip → documents/note.txt` のように表示し、該当する内部ファイルをプレビュー・ダウンロードできる。動画は一致した時刻へ移動する。
+
+ZIP内の対応形式はTXT、JPG/JPEG/PNG、MP4/MOV/MKV/AVI/WEBM、PDF。入れ子ZIPと未対応形式はスキップする。対応ファイルがないZIP、登録可能な内容がないZIPはエラーにする。暗号化、シンボリックリンク、不正な相対パス、対応ファイルの内部パス重複もエラーにする。上限はディレクトリを含む1000エントリ、単体の展開サイズ512MiB、全ファイルの展開サイズ合計1GiB。
+
+解凍先はWSL内の一時ディレクトリとし、登録・検索・プレビューの処理後に削除する。プレビューでは指定された内部ファイルだけを取り出す。ブラウザー用に変換したWebMは、既存の動画と同様に一時領域のキャッシュへ保存する。
 
 ## 実装ファイル
 
@@ -216,19 +270,48 @@ wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/r
 - `requirements.txt`: 直接依存関係の許容範囲
 - `requirements.lock`: この再現対象環境で解決済みのPython全依存バージョン
 - `model-cache.json`: モデル・tokenizer・カスタムコードの固定リビジョン
+- `src/rag_poc/archive.py`: ZIPの検査と一時展開
+- `src/rag_poc/pdf.py`: PDFのページ画像化と一時画像の解放
+- `tests/test_zip.py`: ZIP・PDF対応の隔離テスト。EmbeddingとQdrant接続は代替し、登録情報・検索結果・配信処理を確認
+
+ZIP・PDFの隔離テストはリポジトリルートから `python -B -m unittest discover -s rag/tests -v` で実行する。Python標準ライブラリのみを使い、テスト用ファイルは `rag/output/` の一時ディレクトリ内で作成・削除する。このコマンドの `python` はWindows側のPythonでも実行でき、モデルやQdrantへ接続しない。
+
+実モデル・CUDA・Qdrantを使う動作確認では、Windows側の `python` ではなく、専用WSL内の `/home/rag/rag-runtime/.venv/bin/python` を使う。Windows側にPyTorchやQdrantの依存関係がないことは、WSLでの実環境テストを省く理由にはならない。既存のPhase 1スモークテストはTXT・画像・動画を確認する。ZIPの実環境確認では、ZIP登録後にテキスト・画像・動画の各検索と画面プレビューを個別に確認する。
+
+既存のスモークテストは次のコマンドで専用WSL内から実行する。
+
+```powershell
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python scripts/smoke-test.py
+```
+
+全形式のfloat16保存とPDF・ZIPを含む実環境確認は、次のコマンドで行う。テスト専用のTXT・画像・動画・画像PDF・ZIPを登録し、float16の実値、各形式の検索、PDFの一致ページ、PDF・ZIPの更新・未変更判定、破損PDF更新時の既存ポイント保持、HTTPアップロード検索とプレビューを確認する。終了時にテスト用の入力ファイル・Qdrantポイント・SQLite行・動画変換キャッシュを削除する。
+
+```powershell
+wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/rag-runtime/.venv/bin/python scripts/verify-float16.py
+```
 
 セットアップスクリプトは次の順で動く。
 
 | スクリプト | 実行場所・役割 |
 | --- | --- |
 | `scripts/recreate.ps1` | Windows PowerShellから実行する入口。WSLの存在を確認し、Ubuntu未登録ならイメージのSHA256を検証して `rag\.wsl\` に登録する。登録済みならBasePathが指定場所か検査し、違えば停止する。続けてWSL構築スクリプトを呼び、既定ユーザーを `rag` にする。 |
-| `scripts/setup-wsl.sh` | 専用WSL内でrootとして実行。Python 3.12 venv、FFmpeg、`rag` ユーザー、ランタイム用ディレクトリを準備し、pip、CUDA 12.8版PyTorch、`requirements.lock` の依存を導入する。最後にモデルキャッシュ準備スクリプトを呼ぶ。 |
+| `scripts/setup-wsl.sh` | 専用WSL内でrootとして実行。Python 3.12 venv、FFmpeg、`rag` ユーザー、ランタイム用ディレクトリを準備し、pip、CUDA 12.8版PyTorch、`requirements.lock` の依存を導入する。モデルキャッシュ、Qdrant Server、既存DBのfloat16移行まで実行する。 |
 | `scripts/prepare-model-cache.py` | `model-cache.json` の4つの固定コミットを読み、推論に必要なチェックポイント、tokenizer、カスタムコードをHFキャッシュに取得する。不要なONNX配布物は取得しない。 |
 | `scripts/smoke-test.py` | `-RunSmokeTest` のとき実行。一時TXT・画像・動画で登録と各種検索、動画時刻を確認し、自分が作成したファイルとQdrant/SQLite記録を削除する。 |
+| `scripts/prepare-qdrant-server.py` | Serverを配置・起動して旧Local DBをfloat16へ移行する。`--start-only` は配置済みServerの起動だけを行う。 |
+| `scripts/verify-float16.py` | 実モデル・CUDA・Serverで全形式の保存型、検索、ZIP更新、HTTP検索・プレビューとテスト記録の削除を確認する。 |
 
 依存関係を意図して更新するときは、変更した `requirements.txt` と、対象環境で生成し直した `requirements.lock` を一緒に保存する。通常の再構築ではlockファイルを直接使用する。
 
 ## マルチモーダル検索の確認記録
+
+画像PDF対応の追加検証では、PDF対応前のZIP登録を再現し、通常更新で不足するPDFページを取り込めることも確認した。既存SQLiteへの処理版列の追加と、テスト用データの後片付けも成功した。
+
+2026-11-24に画像PDF対応を追加し、隔離テスト17件とWSL・RTX 3070・実Qdrantでの検証に成功した。文字を含まない2ページPDFを使い、犬の写真がある2ページ目をテキスト・画像・PDFから検索できた。PDF単体とZIP内PDFのページ番号・配信、HTTPアップロード検索、float16の実値、PDF更新時の旧ページ削除、未変更スキップ、破損PDF更新時の既存ポイント保持を確認した。全5形式の入力から14ポイントを登録し、検証後はテスト用ポイント・SQLite行・入力・変換キャッシュを削除した。ページ画像の描画を目視し、画面の一致ページURLも確認した。
+
+2026-11-24にQdrant Server 1.19.1へ切り替え、既存Local DBの16ポイントをfloat16へ移行した。全件のID・メタデータとfloat16の実値を照合し、型別の計9件で検索結果を比較した。ベクトル要素の最大絶対差は約0.000061、最上位スコアの最大差は約0.000072だった。旧Local DBは保持している。
+
+同日に `scripts/verify-float16.py` をRTX 3070のCUDA環境で実行し、TXT・画像・動画・ZIPの4入力から10ポイントを登録した。全形式のfloat16保存、TXT・画像・動画検索、ZIP検索入力、ZIP更新と未変更スキップ、HTTPアップロード検索、ZIP内のTXT・画像・動画プレビューが成功した。終了後は登録件数が移行後の16ポイントへ戻り、テスト用のSQLite行・入力ファイル・動画変換キャッシュも削除された。
 
 2026-09-25に `recreate.ps1 -RunSmokeTest` を実行し、保存先が正しい既存の専用WSLを再利用する経路で再構築と実処理を確認済み。CUDA利用可能な環境でEmbeddingを生成し、TXT・画像・動画の3入力から5件を登録。テキスト・画像・動画検索がすべて成功し、8秒動画の結果時刻は `0.0〜8.0秒`。スモークテストが作成した入力ファイル、Qdrantポイント、SQLite記録は削除された。今回、WSL未登録時の新規登録分岐は実行していない。
 
@@ -272,3 +355,4 @@ wsl.exe --distribution RAG-Ubuntu --cd $WslRagRoot --user rag --exec /home/rag/r
 - [PyTorch公式インストール案内](https://docs.pytorch.org/get-started/locally/)
 - [Sentence Transformers 3.4.1の依存定義](https://github.com/UKPLab/sentence-transformers/blob/v3.4.1/pyproject.toml)
 - [Jina CLIP v2モデルカードとライセンス](https://huggingface.co/jinaai/jina-clip-v2)
+- [pypdfium2公式API・ページ描画とスレッド制約](https://pypdfium2.readthedocs.io/en/stable/python_api.html)

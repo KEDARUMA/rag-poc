@@ -15,8 +15,11 @@ OUTPUT_ROOT = PROJECT_ROOT / "output"
 # 定数: Linux 側のランタイム保存先。WSL 仮想ディスク内に置く。
 # 定数: 保存場所を専用WSL仮想ディスク内に固定する。
 RUNTIME_ROOT = Path("/home/rag/rag-runtime")
-# 定数: Qdrant Local の永続データ保存先。
-QDRANT_PATH = RUNTIME_ROOT / "qdrant_data"
+# 定数: 移行元として保持する旧Qdrant Localの保存先。
+LEGACY_QDRANT_PATH = RUNTIME_ROOT / "qdrant_data"
+# 定数: 専用WSL内のQdrant Serverと接続先。
+QDRANT_SERVER_ROOT = RUNTIME_ROOT / "qdrant-server"
+QDRANT_URL = "http://127.0.0.1:6333"
 # 定数: 更新判定用 SQLite ファイル。
 INDEX_STATE_PATH = RUNTIME_ROOT / "index_state.sqlite3"
 # 定数: 動画フレームなどの一時ファイル保存先。
@@ -27,6 +30,8 @@ MODEL_REVISION = MODEL_PINS["checkpoint"]["revision"]
 # 定数: Qdrant コレクションとベクトルの仕様。
 COLLECTION_NAME = "rag_multimodal"
 VECTOR_SIZE = 1024
+# 定数: 全形式のベクトルを保存する数値型。
+VECTOR_DATATYPE = "float16"
 # 定数: 初期PoC用のテキスト分割幅と重複幅。
 TEXT_CHUNK_SIZE = 1000
 TEXT_CHUNK_OVERLAP = 100
@@ -49,7 +54,7 @@ def prepare_directories() -> None:
     for directory in (
         DATA_ROOT,
         OUTPUT_ROOT,
-        QDRANT_PATH,
+        QDRANT_SERVER_ROOT,
         TEMP_ROOT,
         RUNTIME_ROOT / "frames",
         RUNTIME_ROOT / "logs",

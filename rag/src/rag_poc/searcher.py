@@ -1,13 +1,16 @@
-"""テキスト・画像・動画クエリのベクトル検索。"""
+"""テキスト・画像・動画・PDF・ZIPクエリのベクトル検索。"""
 
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import numpy as np
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-from .config import COLLECTION_NAME, DATA_ROOT
+from .archive import extract_archive
+from .config import COLLECTION_NAME, TEMP_ROOT
 from .embedding import EmbeddingProvider
+from .pdf import render_pdf_pages
 from .storage import open_client
 from .video import extract_video_frames
 
@@ -19,6 +22,7 @@ TYPE_VALUES = {
     "txt": {"text"},
     "image": {"image"},
     "video": {"video_frame"},
+    "pdf": {"pdf_page"},
 }
 
 
@@ -32,9 +36,9 @@ def _normalize_types(
             selected.update(TYPE_VALUES.get(value.strip().casefold(), set()))
         return selected
     if query_kind == "text":
-        return {"text", "image", "video_frame"}
-    if query_kind == "image":
-        return {"image", "video_frame"}
+        return {"text", "image", "video_frame", "pdf_page"}
+    if query_kind in {"image", "pdf"}:
+        return {"image", "video_frame", "pdf_page"}
     return {"video_frame"}
 
 
@@ -46,6 +50,9 @@ def _query_vectors(
         return list(embedder.embed_texts([query_value]))
     if query_kind == "image":
         return list(embedder.embed_images([Path(query_value).expanduser()]))
+    if query_kind == "pdf":
+        with render_pdf_pages(Path(query_value).expanduser(), TEMP_ROOT) as pages:
+            return [embedder.embed_images([page.path])[0] for page in pages]
 
     video_path = Path(query_value).expanduser()
     with extract_video_frames(video_path) as frames:
@@ -60,6 +67,33 @@ def _query_vectors(
         else:
             chosen = frames
         return list(embedder.embed_images([frame.path for frame in chosen]))
+
+
+@contextmanager
+def _expanded_queries(
+    queries: list[tuple[str, str]],
+) -> Iterator[list[tuple[str, str]]]:
+    """ZIPを内部ファイルのクエリへ展開し、検索完了まで一時ファイルを保つ。"""
+    from .indexer import _chunk_text
+
+    with ExitStack() as stack:
+        expanded = []
+        for kind, value in queries:
+            if kind != "zip":
+                expanded.append((kind, value))
+                continue
+            members = stack.enter_context(
+                extract_archive(Path(value).expanduser(), TEMP_ROOT)
+            )
+            for member in members:
+                if member.kind == "text":
+                    text = member.path.read_text(encoding="utf-8-sig", errors="replace")
+                    expanded.extend(("text", chunk) for chunk in _chunk_text(text))
+                else:
+                    expanded.append((member.kind, str(member.path)))
+        if not expanded:
+            raise ValueError("ZIP内に検索可能な内容がありません")
+        yield expanded
 
 
 def _filter_for_types(types: set[str]) -> Filter:
@@ -79,36 +113,47 @@ def _result_record(point) -> dict | None:
     """QdrantポイントをJSON向けの検索結果に変換する。"""
     payload = point.payload or {}
     kind = payload.get("type")
+    common = {"path": payload.get("file"), "score": float(point.score)}
+    if payload.get("archive_member"):
+        common["archive_member"] = payload["archive_member"]
+    if kind == "pdf_page":
+        return {
+            **common,
+            "type": "pdf",
+            "page": payload.get("page"),
+            "page_count": payload.get("page_count"),
+        }
     if kind == "video_frame":
         return {
+            **common,
             "type": "video",
-            "path": payload.get("file"),
             "time": payload.get("time"),
             "start": payload.get("scene_start"),
             "end": payload.get("scene_end"),
-            "score": float(point.score),
         }
     if kind == "image":
         return {
+            **common,
             "type": "image",
-            "path": payload.get("file"),
             "width": payload.get("width"),
             "height": payload.get("height"),
-            "score": float(point.score),
         }
     if kind == "text":
         return {
+            **common,
             "type": "text",
-            "path": payload.get("file"),
             "chunk_index": payload.get("chunk_index"),
             "text": payload.get("text"),
-            "score": float(point.score),
         }
     return None
 
 
 def _result_key(record: dict, point_id: str) -> tuple:
     """同じ画像・文章・動画シーンの重複検索結果をまとめる。"""
+    if record.get("archive_member"):
+        return ("zip", record.get("path"))
+    if record["type"] == "pdf":
+        return ("pdf", record.get("path"))
     if record["type"] == "video":
         return (
             record["type"],
@@ -132,9 +177,19 @@ def search(
     if not 0.0 <= min_score <= 1.0:
         raise ValueError("--min-score は0から1の範囲で指定してください")
 
+    if query_kind == "zip":
+        result = search_many(
+            [("zip", query_value)], limit, min_score, type_values=type_values
+        )
+        return {
+            "query_type": query_kind,
+            "query": query_value,
+            "results": result["results"],
+        }
+
     types = _normalize_types(query_kind, type_values)
     if not types:
-        raise ValueError("--type に text, image, video のいずれかを指定してください")
+        raise ValueError("--type に text, image, video, pdf のいずれかを指定してください")
 
     embedder = EmbeddingProvider()
     vectors = _query_vectors(query_kind, query_value, embedder)
@@ -183,6 +238,7 @@ def search_many(
     queries: Iterable[tuple[str, str]],
     limit: int = 10,
     min_score: float = 0.0,
+    type_values: Iterable[str] | None = None,
 ) -> dict:
     """複数のクエリを同じモデル・Qdrant接続で検索し、ファイル単位にまとめる。"""
     if limit < 1:
@@ -194,39 +250,46 @@ def search_many(
     if not query_items:
         raise ValueError("検索クエリがありません")
     for query_kind, _ in query_items:
-        if query_kind not in {"text", "image", "video"}:
+        if query_kind not in {"text", "image", "video", "zip", "pdf"}:
             raise ValueError(f"未対応のクエリ種別です: {query_kind}")
 
-    embedder = EmbeddingProvider()
-    client = open_client()
-    merged: dict[str, dict] = {}
-    try:
-        if not client.collection_exists(COLLECTION_NAME):
-            return {"queries": query_items, "results": []}
+    selected_types = tuple(type_values) if type_values is not None else None
+    if selected_types and not _normalize_types("text", selected_types):
+        raise ValueError("--type に text, image, video, pdf のいずれかを指定してください")
 
-        for query_kind, query_value in query_items:
-            query_filter = _filter_for_types(_normalize_types(query_kind, None))
-            vectors = _query_vectors(query_kind, query_value, embedder)
-            for vector in vectors:
-                response = client.query_points(
-                    collection_name=COLLECTION_NAME,
-                    query=vector.tolist(),
-                    query_filter=query_filter,
-                    limit=max(limit * 3, limit),
-                    with_payload=True,
+    merged: dict[str, dict] = {}
+    with _expanded_queries(query_items) as expanded:
+        embedder = EmbeddingProvider()
+        client = open_client()
+        try:
+            if not client.collection_exists(COLLECTION_NAME):
+                return {"queries": query_items, "results": []}
+
+            for query_kind, query_value in expanded:
+                query_filter = _filter_for_types(
+                    _normalize_types(query_kind, selected_types)
                 )
-                for point in response.points:
-                    record = _result_record(point)
-                    if record is None or record["score"] < min_score:
-                        continue
-                    result_path = record.get("path")
-                    if not result_path:
-                        continue
-                    current = merged.get(result_path)
-                    if current is None or record["score"] > current["score"]:
-                        merged[result_path] = record
-    finally:
-        client.close()
+                vectors = _query_vectors(query_kind, query_value, embedder)
+                for vector in vectors:
+                    response = client.query_points(
+                        collection_name=COLLECTION_NAME,
+                        query=vector.tolist(),
+                        query_filter=query_filter,
+                        limit=max(limit * 3, limit),
+                        with_payload=True,
+                    )
+                    for point in response.points:
+                        record = _result_record(point)
+                        if record is None or record["score"] < min_score:
+                            continue
+                        result_path = record.get("path")
+                        if not result_path:
+                            continue
+                        current = merged.get(result_path)
+                        if current is None or record["score"] > current["score"]:
+                            merged[result_path] = record
+        finally:
+            client.close()
 
     results = sorted(
         merged.values(),

@@ -1,4 +1,4 @@
-"""Phase 1のファイル登録CLI。"""
+"""TXT・画像・動画・PDF・ZIPのファイル登録CLI。"""
 
 import argparse
 import json
@@ -16,7 +16,7 @@ from rag_poc.indexer import index_directory
 def main() -> int:
     """引数を読み、登録結果をJSONで標準出力へ返す。"""
     parser = argparse.ArgumentParser(
-        description="TXT・画像・動画をQdrant Localへ登録します"
+        description="TXT・画像・動画・PDF・ZIPをQdrant Serverのfloat16へ登録します"
     )
     parser.add_argument(
         "directory",
@@ -26,8 +26,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--type",
-        default="txt,image,video",
-        help="登録する種別。txt,image,videoをカンマ区切りで指定",
+        default="txt,image,video,pdf,zip",
+        help="登録する種別。txt,image,video,pdf,zipをカンマ区切りで指定",
     )
     parser.add_argument(
         "--rebuild",
